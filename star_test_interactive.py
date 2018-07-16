@@ -2,13 +2,59 @@
 import numpy as np
 import os
 
+###
+# physical output channels
+###
+num_ch = 16*3
 mapping = dict()
 mapping_file = 'mapping.txt'
 
-print('***************************************')
-print('* Interactive starfield test program. *')
-print('***************************************')
-print('')
+###
+# allocate array of channels, turn on first channel
+###
+chan_data = np.zeros(num_ch, dtype=float)
+chan_data[0] = 1.0
+brightness = 255
+curr_ch = 0
+next_ch = None
+
+channel_viz_steps = [
+        '.',
+        '-',
+        '*',
+        '#',
+        '\033[7m \033[0m'
+    ]
+
+###
+# map 0..1 -> 0..(N-1)
+###
+def map_unity_to_range(ndarr, scale, dtype) :
+    return ((ndarr * (scale-1)) + 0.5).astype(dtype)
+
+def help() :
+    print('***************************************')
+    print('* Interactive starfield test program. *')
+    print('***************************************')
+    print('')
+    print('Commands:')
+    print('   <enter> goto next channel')
+    print('   gNNN    goto channel NNN, valid 0..%d'%(num_ch - 1))
+    print('   q       exit')
+    print('   +/-     increase/decrease brightness of pixel')
+    print('   =xxxx   set mapping of this channel to star xxxx')
+    print('   #       remove mapping from current channel')
+    print('   q       quit without saving')
+    print('   wFILE   quit, saving to file (default: %s)'%(mapping_file))
+    print('   p       print mapping table')
+    print('   a       all on')
+    print('   h       help')
+
+help()
+
+###
+# load mapping
+###
 
 if os.path.exists(mapping_file) :
     try :
@@ -29,31 +75,9 @@ if os.path.exists(mapping_file) :
         mapping = dict()
 
     print('')
-###
-# physical output channels
-###
-num_ch = 16*3
-chan_data = np.zeros(num_ch, dtype=float)
-curr_ch = 0
-next_ch = None
-brightness = 255
-
-
-print('Commands:')
-print('   <enter> goto next channel')
-print('   gNNN    goto channel NNN, valid 0..%d'%(num_ch - 1))
-print('   q       exit')
-print('   +/-     increase/decrease brightness of pixel')
-print('   =xxxx   set mapping of this channel to star xxxx')
-print('   #       remove mapping from current channel')
-print('   q       quit without saving')
-print('   wFILE   quit, saving to file (default: %s)'%(mapping_file))
-print('   p       print mapping table')
-print('   a       all on')
 
 print('')
 
-channel_viz_steps = ' .-*#'
 
 while True :
 
@@ -62,29 +86,30 @@ while True :
         next_ch = None
 
     if next_ch is not None :
-        print('Switching to channel %d.'%(next_ch))
         curr_ch = next_ch
         chan_data[...] = 0
         chan_data[curr_ch] = 1.0
         next_ch = None
 
-    channel_viz_ix = (np.clip(chan_data, 0.0, 1.0)*(len(channel_viz_steps)-1)+0.5).astype('i')
+    channel_viz_ix = map_unity_to_range(chan_data, len(channel_viz_steps), 'i')
     channel_viz = ''.join([ channel_viz_steps[i] for i in channel_viz_ix])
-    channel_num_ones  = ''.join( '%d'%(i%10) for i in range(num_ch))
-    channel_num_tens  = ''.join( '%d'%(i // 10) for i in range(num_ch))
 
-    print('Output: [%s]'%channel_viz)
+    print('%s '%channel_viz, end='')
 
     if curr_ch in mapping :
-        prompt='Star \"%s\", Ch %d>'%(mapping[curr_ch], curr_ch)
+        prompt='B%d/Ch%d \"%s\"> '%(brightness, curr_ch, mapping[curr_ch])
     else :
-        prompt='Ch %d>'%(curr_ch)
+        prompt='B%d/Ch%d> '%(brightness, curr_ch)
+
     ans = input(prompt).strip()
 
     if ans.startswith('p') :
         for ch_num in sorted(mapping) :
             print(' Ch %02d -> \'%s\''%(ch_num, mapping[ch_num]))
         continue
+
+    if ans.startswith('h') :
+        help()
 
     #################################################################
     #
@@ -151,7 +176,6 @@ while True :
             except Exception as e :
                 print('Cannot parse brightness value, exception:', e)
                 brightness = 255
-
         continue
 
     #################################################################
