@@ -182,7 +182,7 @@ def main():
 
     now = time.time()
     last_key = now
-    frame.start_fade(constellations[0], now, 2.0)
+    frame.start_fade(constellations[0], now, 1.0)
 
     while True:
         if frame.is_busy():
@@ -199,13 +199,19 @@ def main():
             if now - last_key > 120 :
                 last_key = now
                 ix = random.randint(0, len(constellations)-1)
-                frame.start_fade(constellations[ix], now, 2.0)
+                frame.start_fade(constellations[ix], now, 5.0)
         else :
             last_key = now
 
         action = key_actions.get(key)
-        if type(action) == int and action >= 1 and action <= len(constellations):
-            frame.start_fade(constellations[action - 1], now, 2.0)
+        if type(action) == int :
+            if action >= 1 and action <= len(constellations):
+                frame.start_fade(constellations[action - 1], now, 1.0)
+            if action == 0 :
+                tgt = [ 0.0 for v in range(frame.nchans) ]
+                frame.start_fade(tgt, now, 1.0)
+
+
 
         if action == 'bright' :
             brightness = min(1.0, brightness + 0.1)
@@ -215,7 +221,7 @@ def main():
             frame.set_brightness(brightness)
         if action == 'random' :
             tgt = [ random.uniform(0.0, 1.0) for v in range(frame.nchans) ]
-            frame.start_fade(tgt, now, 2.0)
+            frame.start_fade(tgt, now, 1.0)
 
 
 if __name__ == '__main__':
