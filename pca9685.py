@@ -1,8 +1,6 @@
 #!/usr/bin/python
 import smbus
 
-import numpy as np
-
 # REGS = [
 #     ('MODE1', 0x00),
 #     ('MODE2', 0x01),
@@ -26,13 +24,14 @@ import numpy as np
 
 LEDnBASE = lambda n: 0x06 + 4 * n
 
+flatten = lambda l: [item for sublist in l for item in sublist]
+
 
 class PCA9685:
     def __init__(self, bus, addr=0x40):
         self.bus = bus
         self.addr = addr
         self.init_chip()
-        self.onoff_regs = np.zeros((16, 4), np.uint8)
 
     def init_chip(self):
         # MODE1 RESTART=0, EXTCLK=0, AI=1, SLEEP=0, SUB1..3=0, ALLCALL=0
@@ -41,17 +40,14 @@ class PCA9685:
         self.bus.write_byte_data(self.addr, 0x01, 0x10)  # invert, totem pole
 
     def update(self, data):
-        if type(data) != np.ndarray:
-            data = np.array(data, dtype='i')
+        regs = list()
 
-        # registers are ON_L, ON_H, OFF_L, OFF_H
-        self.onoff_regs[:, 2] = data & 0xff
-        self.onoff_regs[:, 3] = (data >> 8) & 0xff
-        payload = self.onoff_regs.tobytes()
+        reg_quads = [(0, 0, 0xff & v, 0xff & (v >> 8)) for v in data]
+        regs = flatten(reg_quads)
 
-        # smbus library forces us to do it that ugly :-(
-        self.bus.write_i2c_block_data(self.addr, LEDnBASE(0), [v for v in payload[0:32]])
-        self.bus.write_i2c_block_data(self.addr, LEDnBASE(8), [v for v in payload[32:64]])
+        self.bus.write_i2c_block_data(self.addr, LEDnBASE(0), regs[0:32])
+        if len(data) > 8:
+            self.bus.write_i2c_block_data(self.addr, LEDnBASE(8), regs[32:64])
 
 
 def regs_normalized(v):

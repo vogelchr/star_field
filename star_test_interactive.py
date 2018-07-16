@@ -2,8 +2,6 @@
 import os
 import smbus
 
-import numpy as np
-
 import pca9685
 
 ###
@@ -17,7 +15,7 @@ mapping_file = 'mapping.txt'
 ###
 # allocate array of channels, turn on first channel
 ###
-chan_data = np.zeros(num_ch, dtype=float)
+chan_data = [ 0.0 for k in range(num_ch)]
 chan_data[0] = 1.0
 brightness = 255
 curr_ch = 0
@@ -35,8 +33,9 @@ channel_viz_steps = [
 ###
 # map 0..1 -> 0..(N-1)
 ###
-def map_unity_to_range(ndarr, scale, dtype='i'):
-    return ((ndarr * (scale - 1)) + 0.5).astype(dtype)
+def map_unity_to_range(arr, scale):
+    k = scale - 1
+    return [int(v*k + 0.5) for v in arr]
 
 
 def help():
@@ -103,7 +102,8 @@ while True:
 
     if next_ch is not None:
         curr_ch = next_ch
-        chan_data[...] = 0
+        for k in range(num_ch) :
+            chan_data[k] = 0.0
         chan_data[curr_ch] = 1.0
         next_ch = None
 
@@ -206,7 +206,8 @@ while True:
 
     if ans.lower().startswith('a'):
         # set all channels
-        chan_data[...] = 1.0
+        for k in range(num_ch) :
+            chan_data[k] = 1.0
 
     #################################################################
     #
