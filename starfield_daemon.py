@@ -1,6 +1,6 @@
 #!/usr/bin/python
-import select
 import random
+import select
 import smbus
 import time
 
@@ -11,7 +11,7 @@ import pca9685
 NUM_CHANS = 48
 NUM_CHIPS = (NUM_CHANS + 15) // 16
 
-keycode = {
+key_actions = {
     82: 0,  # numeric keypad 0..9
     79: 1,
     80: 2,
@@ -22,12 +22,12 @@ keycode = {
     71: 7,
     72: 8,
     73: 9,
-    83: 'KP_COMMA',
-    96: 'KP_ENTER',
-    78: 'KP_PLUS',
-    74: 'KP_MINUS',
-    55: 'KP_MULT',
-    98: 'KP_DIV'
+    83: 'random',
+    #    96: 'KP_ENTER',
+    78: 'bright',
+    74: 'dim',
+    #   55: 'KP_MULT',
+    #    98: 'KP_DIV'
 }
 
 
@@ -43,126 +43,166 @@ def read_star_mapping(fn):
     return ret
 
 
+def read_constellations(fn, mapping):
+    ret = list()
+    with open('constellations.txt', 'rt') as f:
+        curr_const = None
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            if line.startswith('@'):
+                if curr_const:
+                    ret.append(curr_const)
+                curr_const = [0.0 for v in range(NUM_CHANS)]
+                continue
+            star_num = int(line)
+            star_ch = mapping[star_num]
+            curr_const[star_ch] = 1.0
+    if curr_const:
+        ret.append(curr_const)
+    return ret
+
+
 # multiply accumulate
 def vector_mac(acc, v, m=1.0):
     for k in range(len(acc)):
         acc[k] += v[k] * m
 
 
-def vector_diff(a, b, fact):
+# vector difference (scaled by factor)
+def vector_diff(a, b, fact=1.0):
     return [(va - vb) * fact for va, vb in zip(a, b)]
 
 
-def normalized_to_pwm(arr):
-    return [int(0.5 + (4095.0 * (min(1.0, max(0.0, v)) ** 3))) for v in arr]
+# normalized led brightness to PWM value (scales like third power)
+def normalized_to_pwm(arr, bright=1.0):
+    return [int(0.5 + (4095.0 * (min(1.0, max(0.0, v * bright)) ** 3))) for v in arr]
+
+
+class LED_Fader:
+    def __init__(self, bus, nchan, bright=1.0):
+        self.nchans = nchan
+        self.nchips = (nchan + 15) // 16
+        self.chips = [pca9685.PCA9685(bus, 0x40 + k) for k in range(self.nchips)]
+        self.curr = [0.0 for v in range(nchan)]
+
+        self.brightness = bright
+
+        self.fade_delta = None  # increment/second for fade
+        self.fade_start = None  # absolute time the fade has started
+        self.fade_time = None  # nominal fade time in seconds
+        self.fade_done = None  # time of fade already processed (in seconds)
+
+    def start_fade(self, tgt, now, fade_time):
+        self.fade_delta = vector_diff(tgt, self.curr, 1.0 / fade_time)
+        self.fade_start = now
+        self.fade_done = 0.0  # how much of fade_time has already been accounted for
+        self.fade_time = fade_time  # total fade time
+
+    def set_brightness(self, bright):
+        self.brightness = bright
+        self.chip_update()
+
+    def fade_update(self, now):
+        delta_t = now - self.fade_start
+
+        if delta_t >= self.fade_time:
+            self.fade_start = None
+            delta_t = self.fade_time
+
+        print('fade_update %.2f of %.2f' % (delta_t, self.fade_time))
+
+        vector_mac(self.curr, self.fade_delta, delta_t - self.fade_done)  # add some more
+        self.chip_update()
+        self.fade_done = delta_t
+
+    def chip_update(self):
+        led_pwm = normalized_to_pwm(self.curr, self.brightness)
+        for k in range(self.nchips):
+            self.chips[k].update(led_pwm[k * 16:(k + 1) * 16])
+
+    def is_busy(self):
+        return self.fade_start is not None
+
+
+class Evdev_Keyboard:
+    def __init__(self):
+        self.keyboard = None
+        self.last_active = None
+
+        # open keyboard (if present)
+        all_devs = evdev.list_devices()
+        if len(all_devs) > 0:
+            print('Opening keyboard at', all_devs[0])
+            self.keyboard = evdev.InputDevice(all_devs[0])
+            self.keyboard.grab()
+        else:
+            print('No keyboard connected!')
+
+    def poll(self, sleeptime):
+        if self.keyboard is None:
+            time.sleep(sleeptime)
+            return None
+
+        rd, wr, ex = select.select([self.keyboard], [], [], sleeptime)
+        if self.keyboard in rd:
+            self.keyboard.read()
+            ak = self.keyboard.active_keys()
+
+            if not ak:
+                self.last_active = None
+                return None
+
+            if ak[0] != self.last_active:
+                self.last_active = ak[0]
+                return ak[0]
 
 
 def main():
-    # open i2c bus, create instances for all chips
-    bus = smbus.SMBus(0)
-    chips = [pca9685.PCA9685(bus, 0x40 + k) for k in range(NUM_CHIPS)]
-
-    ###
-    # current LED values for a frame, the target to fade to, the increment per step
-    # and the number of steps to fade
-    ###
-    led_frame_curr = [0.0 for v in range(NUM_CHANS)]
-    led_frame_tgt = None
-    led_frame_inc = None
-    led_frame_ctr = 0
-
     # read star to channel mapping table
     mapping = read_star_mapping('mapping.txt')
     print('Read %d channels from mappint file.' % len(mapping))
 
-    constellations = list()
-    curr_const_ix = 0
+    constellations = read_constellations('constellations.txt', mapping)
+    print('Read %d constellations.' % len(constellations))
 
-    with open('constellations.txt', 'rt') as f:
-        constellation_pattern = None
+    frame = LED_Fader(smbus.SMBus(0), max(mapping.values()) + 1)
+    print('LED frame has %d channels, %d chips.' % (frame.nchans, frame.nchips))
+    frame.chip_update()
+    frame.start_fade(constellations[0], time.time(), 2.0)
 
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith('#'):
-                continue
-            if line.startswith('@'):
-                if constellation_pattern:
-                    constellations.append(constellation_pattern)
-                constellation_pattern = [0.0 for v in range(NUM_CHANS)]
-                continue
-            star_num = int(line)
-            star_ch = mapping[star_num]
-            constellation_pattern[star_ch] = 1.0
-    if constellation_pattern:
-        constellations.append(constellation_pattern)
-
-    print('')
-
-    # open keyboard (if present)
-    all_devs = evdev.list_devices()
-    if len(all_devs) > 0:
-        print('Opening keyboard at', all_devs[0])
-        keyboard = evdev.InputDevice(all_devs[0])
-        keyboard.grab()
-    else:
-        print('No keyboard connected!')
-        keyboard = None
+    keyboard = Evdev_Keyboard()
+    brightness = 1.0
 
     ###
     # time per frame in seconds
     ###
-    delta_t_frame = 0.05
-    t_frame = time.time()
     last_key_pressed = None  # last pressed keyboard button
 
     while True:
         now = time.time()
-        if now >= t_frame:
-            ###
-            # do the frame update!
-            ###
-            t_frame += delta_t_frame
-
-            if led_frame_tgt is not None:
-                led_frame_ctr = 10
-                led_frame_inc = vector_diff(led_frame_tgt, led_frame_curr, 1.0 / (led_frame_ctr - 1))
-                led_frame_tgt = None
-
-            if led_frame_ctr > 0:
-                vector_mac(led_frame_curr, led_frame_inc)
-                led_frame_ctr -= 1
-                led_pwm = normalized_to_pwm(led_frame_curr)
-                for k in range(NUM_CHIPS):
-                    chips[k].update(led_pwm[k * 16:(k + 1) * 16])
-
-        if now >= t_frame:  # too late!
-            print('late!')
-            t_frame = now
-            sleeptime = 0.0
+        if frame.is_busy():
+            frame.fade_update(now)
+            sleeptime = 0.05
         else:
-            sleeptime = t_frame - now
+            sleeptime = None
 
-        ###
-        # check if there is keyboard input
-        ###
-        if keyboard:
-            rdlist = [keyboard]
-        else:
-            rdlist = []
-        rd, wr, ex = select.select(rdlist, [], [], sleeptime)
+        key = keyboard.poll(sleeptime)
+        action = key_actions.get(key)
 
-        if keyboard in rd:
-            keyboard.read()
-            ak = keyboard.active_keys()
-            if len(ak) == 1 and last_key_pressed is not ak[0]:
-                last_key_pressed = ak[0]
-                keyinfo = keycode.get(last_key_pressed)
-                if type(keyinfo) == str and keyinfo == 'KP_MULT' :
-                    led_frame_tgt = [ random.uniform(0.0, 1.0) for v in range(NUM_CHANS) ]
-                if type(keyinfo) == int :
-                    constno = keyinfo - 1
-                    if constno >= 0 and constno < len(constellations) :
-                        led_frame_tgt = constellations[constno]
+        if type(action) == int and action >= 1 and action <= len(constellations):
+            frame.start_fade(constellations[action - 1], now, 2.0)
+
+        if action == 'bright' :
+            brightness = min(1.0, brightness + 0.1)
+            frame.set_brightness(brightness)
+        if action == 'dim' :
+            brightness = max(0.1, brightness - 0.1)
+            frame.set_brightness(brightness)
+        if action == 'random' :
+            tgt = [ random.uniform(0.0, 1.0) for v in range(frame.nchans) ]
+            frame.start_fade(tgt, now, 2.0)
 
 
 if __name__ == '__main__':
