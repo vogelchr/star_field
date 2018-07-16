@@ -1,13 +1,16 @@
 #!/usr/bin/python
 import os
+import smbus
 
 import numpy as np
+
 import pca9685
 
 ###
 # physical output channels
 ###
 num_ch = 16 * 3
+num_chips = (num_ch + 15) // 16
 mapping = dict()
 mapping_file = 'mapping.txt'
 
@@ -32,7 +35,7 @@ channel_viz_steps = [
 ###
 # map 0..1 -> 0..(N-1)
 ###
-def map_unity_to_range(ndarr, scale, dtype):
+def map_unity_to_range(ndarr, scale, dtype='i'):
     return ((ndarr * (scale - 1)) + 0.5).astype(dtype)
 
 
@@ -86,12 +89,11 @@ print('')
 bus = smbus.SMBus(0)
 chips = list()
 
-for k in range((num_ch + 15)//16) :
+for k in range(num_chips):
     # address consecutive from 0x40
     chip = pca9685.PCA9685(bus, 0x40 + k)
     chip.init_chip()
     chips.append(chip)
-
 
 while True:
 
@@ -105,7 +107,11 @@ while True:
         chan_data[curr_ch] = 1.0
         next_ch = None
 
-    channel_viz_ix = map_unity_to_range(chan_data, len(channel_viz_steps), 'i')
+    chip_data = map_unity_to_range(chan_data, 4096)
+    for k in range(num_chips):
+        chips[k].update(chip_data[k * 16:(k + 1) * 16])
+
+    channel_viz_ix = map_unity_to_range(chan_data, len(channel_viz_steps))
     channel_viz = ''.join([channel_viz_steps[i] for i in channel_viz_ix])
 
     print('%s ' % channel_viz, end='')

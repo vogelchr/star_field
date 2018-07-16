@@ -1,7 +1,5 @@
 #!/usr/bin/python
-import math
 import smbus
-import time
 
 import numpy as np
 
@@ -28,6 +26,7 @@ import numpy as np
 
 LEDnBASE = lambda n: 0x06 + 4 * n
 
+
 class PCA9685:
     def __init__(self, bus, addr=0x40):
         self.bus = bus
@@ -42,13 +41,17 @@ class PCA9685:
         self.bus.write_byte_data(self.addr, 0x01, 0x10)  # invert, totem pole
 
     def update(self, data):
-        if type(data) != np.ndarray :
+        if type(data) != np.ndarray:
             data = np.array(data, dtype='i')
 
         # registers are ON_L, ON_H, OFF_L, OFF_H
-        self.onoff_regs[:,2] = data & 0xff
-        self.onoff_regs[:,3] = (data >> 8) & 0xff
-        bus.write_i2c_block_data(self.addr, LEDnBASE(0), self.onoff_regs.tobytes())
+        self.onoff_regs[:, 2] = data & 0xff
+        self.onoff_regs[:, 3] = (data >> 8) & 0xff
+        payload = self.onoff_regs.tobytes()
+
+        # smbus library forces us to do it that ugly :-(
+        self.bus.write_i2c_block_data(self.addr, LEDnBASE(0), [v for v in payload[0:32]])
+        self.bus.write_i2c_block_data(self.addr, LEDnBASE(8), [v for v in payload[32:64]])
 
 
 def regs_normalized(v):
@@ -58,6 +61,9 @@ def regs_normalized(v):
 
 
 def main():
+    import math
+    import time
+
     bus = smbus.SMBus(0)
 
     t = 0.0
