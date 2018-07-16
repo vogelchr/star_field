@@ -111,8 +111,6 @@ class LED_Fader:
             self.fade_start = None
             delta_t = self.fade_time
 
-        print('fade_update %.2f of %.2f' % (delta_t, self.fade_time))
-
         vector_mac(self.curr, self.fade_delta, delta_t - self.fade_done)  # add some more
         self.chip_update()
         self.fade_done = delta_t
@@ -147,7 +145,10 @@ class Evdev_Keyboard:
 
         rd, wr, ex = select.select([self.keyboard], [], [], sleeptime)
         if self.keyboard in rd:
-            self.keyboard.read()
+            for ev in self.keyboard.read() :
+                # drain queue
+                pass
+
             ak = self.keyboard.active_keys()
 
             if not ak:
@@ -167,30 +168,42 @@ def main():
     constellations = read_constellations('constellations.txt', mapping)
     print('Read %d constellations.' % len(constellations))
 
-    frame = LED_Fader(smbus.SMBus(0), max(mapping.values()) + 1)
+    brightness = 0.5
+    frame = LED_Fader(smbus.SMBus(0), max(mapping.values()) + 1, brightness)
     print('LED frame has %d channels, %d chips.' % (frame.nchans, frame.nchips))
     frame.chip_update()
-    frame.start_fade(constellations[0], time.time(), 2.0)
 
     keyboard = Evdev_Keyboard()
-    brightness = 1.0
 
     ###
     # time per frame in seconds
     ###
     last_key_pressed = None  # last pressed keyboard button
 
+    now = time.time()
+    last_key = now
+    frame.start_fade(constellations[0], now, 2.0)
+
     while True:
-        now = time.time()
         if frame.is_busy():
             frame.fade_update(now)
             sleeptime = 0.05
         else:
-            sleeptime = None
+            sleeptime = 5.0
 
         key = keyboard.poll(sleeptime)
-        action = key_actions.get(key)
+        now = time.time()
 
+        # if no key was pressed for two minutes, load a random constellation
+        if key is None :
+            if now - last_key > 120 :
+                last_key = now
+                ix = random.randint(0, len(constellations)-1)
+                frame.start_fade(constellations[ix], now, 2.0)
+        else :
+            last_key = now
+
+        action = key_actions.get(key)
         if type(action) == int and action >= 1 and action <= len(constellations):
             frame.start_fade(constellations[action - 1], now, 2.0)
 
